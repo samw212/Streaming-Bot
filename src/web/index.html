@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ytm-bot remote</title>
+<style>
+  :root {
+    --bg: #f4f4f6; --surface: #ffffff; --surface-2: #f0f0f3; --text: #17171c; --muted: #6a6a76;
+    --border: #e3e3e8; --accent: #e0183a; --accent-hover: #c41532; --on-accent: #ffffff; --track: #e3e3e8;
+    --danger: #b3261e; --shadow: 0 1px 2px rgb(0 0 0 / .05), 0 4px 16px rgb(0 0 0 / .04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e0e11; --surface: #18181d; --surface-2: #222229; --text: #f1f1f4; --muted: #9b9ba8;
+      --border: #2a2a32; --accent: #e8264a; --accent-hover: #f23d5f; --on-accent: #ffffff; --track: #2d2d36;
+      --danger: #ff8a80; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 20px 16px 64px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  h1 { font-size: 17px; margin: 0; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
+  h1 svg { color: var(--accent); }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0; font-weight: 600; }
+  .pill { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .pill[data-status="playing"] { color: #1e8e3e; } .pill[data-status="ad"] { color: #b26a00; } .pill[data-status="offline"] { color: var(--danger); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); }
+  .now { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 16px; align-items: center; }
+  .art { width: 112px; height: 112px; border-radius: 10px; background: var(--surface-2) center / cover no-repeat; display: grid; place-items: center; color: var(--muted); }
+  .title { font-size: 20px; font-weight: 650; margin: 0 0 2px; letter-spacing: -.015em; overflow-wrap: anywhere; }
+  .sub { color: var(--muted); margin: 0; overflow-wrap: anywhere; }
+  .progress { margin-top: 14px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .bar { height: 6px; border-radius: 3px; background: var(--track); cursor: pointer; position: relative; overflow: hidden; }
+  .bar > span { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 3px; width: 0; }
+  .controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+  .transport { display: flex; align-items: center; gap: 6px; }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; border-radius: 8px; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; }
+  .icon:hover { background: var(--surface-2); }
+  .icon.primary { width: 52px; height: 52px; background: var(--accent); color: var(--on-accent); }
+  .icon.primary:hover { background: var(--accent-hover); }
+  .volume { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  input[type=range] { accent-color: var(--accent); width: 130px; max-width: 100%; }
+  .switch { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; cursor: pointer; user-select: none; }
+  .switch input { accent-color: var(--accent); width: 16px; height: 16px; }
+  form { display: flex; gap: 8px; margin-top: 12px; }
+  input[type=search] { flex: 1; min-width: 0; font: inherit; color: inherit; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .btn { padding: 8px 14px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); font-size: 14px; white-space: nowrap; }
+  .btn:hover { border-color: var(--muted); }
+  .btn.accent { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+  .btn.accent:hover { background: var(--accent-hover); }
+  .btn.small { padding: 4px 10px; font-size: 13px; }
+  .row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
+  ol { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 2px; }
+  li { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 6px; border-radius: 10px; }
+  li:hover { background: var(--surface-2); }
+  .thumb { width: 40px; height: 40px; border-radius: 6px; background: var(--surface-2) center / cover no-repeat; display: grid; place-items: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .meta { min-width: 0; }
+  .meta b { display: block; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta span { display: block; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .actions { display: flex; gap: 6px; align-items: center; }
+  .empty { color: var(--muted); font-size: 14px; margin: 10px 0 0; }
+  .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%) translateY(20px); opacity: 0; transition: .2s; background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: calc(100% - 32px); white-space: pre-line; pointer-events: none; }
+  .toast.show { opacity: 1; transform: translateX(-50%); }
+  .toast.error { background: var(--danger); color: #fff; }
+  @media (max-width: 520px) {
+    .now { grid-template-columns: 80px minmax(0, 1fr); gap: 12px; }
+    .art { width: 80px; height: 80px; }
+    .title { font-size: 17px; }
+    li { grid-template-columns: 36px minmax(0, 1fr) auto; gap: 10px; }
+    .thumb { width: 36px; height: 36px; }
+    .hide-sm { display: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M10 8.5v7l6-3.5z" fill="#fff"/></svg> ytm-bot</h1>
+    <span class="pill" id="status" data-status="offline">Connecting…</span>
+  </header>
+
+  <section class="card" aria-label="Now playing">
+    <div class="now">
+      <div class="art" id="art" role="img" aria-label="Album art">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3z"/></svg>
+      </div>
+      <div class="meta-now">
+        <p class="title" id="title">Nothing playing</p>
+        <p class="sub" id="subtitle">Search below to get started.</p>
+      </div>
+    </div>
+    <div class="progress">
+      <span id="pos">0:00</span>
+      <div class="bar" id="bar" role="slider" aria-label="Seek" aria-valuemin="0" aria-valuenow="0" tabindex="0"><span id="fill"></span></div>
+      <span id="dur">0:00</span>
+    </div>
+    <div class="controls">
+      <div class="transport">
+        <button class="icon" id="prev" aria-label="Previous"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
+        <button class="icon primary" id="toggle" aria-label="Play or pause"><svg id="toggle-icon" width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+        <button class="icon" id="next" aria-label="Next"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6zM16 6h2v12h-2z"/></svg></button>
+      </div>
+      <label class="volume" title="Volume">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4z"/></svg>
+        <input type="range" id="volume" min="0" max="100" value="50" aria-label="Volume">
+      </label>
+      <label class="switch"><input type="checkbox" id="autoplay"> Autoplay when queue ends</label>
+    </div>
+  </section>
+
+  <section class="card" aria-label="Search">
+    <h2>Search</h2>
+    <form id="search-form">
+      <input type="search" id="query" placeholder="Song, artist, or YouTube Music link" autocomplete="off" aria-label="Search query">
+      <button class="btn accent" type="submit">Search</button>
+    </form>
+    <ol id="results"></ol>
+  </section>
+
+  <section class="card" aria-label="Queue">
+    <div class="row-head">
+      <h2 id="queue-title">Up next</h2>
+      <button class="btn small" id="clear" hidden>Clear</button>
+    </div>
+    <ol id="queue"></ol>
+  </section>
+</main>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const ICON_PLAY = '<path d="M8 5v14l11-7z"/>';
+  const ICON_PAUSE = '<path d="M6 5h4v14H6zm8 0h4v14h-4z"/>';
+  const STATUS_TEXT = { playing: 'Playing', paused: 'Paused', idle: 'Idle', loading: 'Loading…', ad: 'Ad playing', offline: 'Offline' };
+
+  // Optional API token, passed as #token=... so it never reaches server logs.
+  const hashToken = new URLSearchParams(location.hash.slice(1)).get('token');
+  if (hashToken) { try { sessionStorage.setItem('ytm-bot-token', hashToken); } catch {} history.replaceState(null, '', location.pathname); }
+  let token = null; try { token = sessionStorage.getItem('ytm-bot-token'); } catch {}
+
+  let snapshot = null, lastPollAt = 0, volumeDragging = false;
+
+  async function api(path, options = {}) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = 'Bearer ' + token;
+    const res = await fetch(path, { ...options, headers });
+    const body = await res.json().catch(() => ({ ok: false, message: res.statusText }));
+    if (!res.ok || body.ok === false) throw new Error(body.message || res.statusText);
+    return body;
+  }
+
+  async function command(text, { quiet = false } = {}) {
+    try {
+      const result = await api('/api/command', { method: 'POST', body: JSON.stringify({ command: text }) });
+      if (!quiet) toast(result.message);
+      await refresh();
+      return result;
+    } catch (error) { toast(error.message, true); }
+  }
+
+  let toastTimer;
+  function toast(message, isError = false) {
+    const el = $('toast');
+    el.textContent = message; el.classList.toggle('error', isError); el.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), isError ? 5000 : 2500);
+  }
+
+  const fmt = (s) => {
+    s = Math.max(0, Math.floor(s || 0));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(s % 60).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+  };
+  const describe = (t) => [t.artist, t.album].filter(Boolean).join(' · ') || t.kind || '';
+  const safeUrl = (u) => /^https:\/\//.test(u || '') ? u : '';
+  const setBg = (el, url) => { el.style.backgroundImage = safeUrl(url) ? `url("${safeUrl(url).replace(/"/g, '%22')}")` : ''; };
+
+  function row({ thumb, index, title, subtitle, buttons }) {
+    const li = document.createElement('li');
+    const t = document.createElement('div'); t.className = 'thumb';
+    if (thumb) setBg(t, thumb); else t.textContent = index ?? '';
+    const meta = document.createElement('div'); meta.className = 'meta';
+    const b = document.createElement('b'); b.textContent = title;
+    const s = document.createElement('span'); s.textContent = subtitle;
+    meta.append(b, s);
+    const actions = document.createElement('div'); actions.className = 'actions';
+    for (const btn of buttons) actions.append(btn);
+    li.append(t, meta, actions);
+    return li;
+  }
+  function button(label, onClick, { accent = false, aria, cls = '' } = {}) {
+    const b = document.createElement('button');
+    b.className = `btn small ${accent ? 'accent' : ''} ${cls}`; b.textContent = label;
+    if (aria) b.setAttribute('aria-label', aria);
+    b.addEventListener('click', onClick);
+    return b;
+  }
+  const playTarget = (t) => t.videoId ? `id:${t.videoId}` : `https://music.youtube.com/playlist?list=${t.playlistId}`;
+
+  function render() {
+    const s = snapshot;
+    const status = s ? s.status : 'offline';
+    $('status').dataset.status = status; $('status').textContent = STATUS_TEXT[status] || status;
+    const cur = s && s.current, player = s && s.player;
+    $('title').textContent = cur ? (cur.title || 'Loading…') : 'Nothing playing';
+    $('subtitle').textContent = cur ? describe(cur) : (s ? 'Search below to get started.' : 'Can’t reach the bot.');
+    setBg($('art'), cur && (cur.thumbnail || (player && player.artwork)));
+    $('art').querySelector('svg').style.display = cur && (cur.thumbnail || player?.artwork) ? 'none' : '';
+    $('toggle-icon').innerHTML = status === 'playing' || status === 'ad' ? ICON_PAUSE : ICON_PLAY;
+    if (s) $('autoplay').checked = s.autoplay;
+    if (player && !volumeDragging) $('volume').value = player.volume;
+    renderProgress();
+
+    const queue = s ? s.queue : [];
+    $('queue-title').textContent = queue.length ? `Up next · ${queue.length}` : 'Up next';
+    $('clear').hidden = queue.length === 0;
+    const list = $('queue'); list.replaceChildren();
+    if (!queue.length) {
+      const p = document.createElement('p'); p.className = 'empty';
+      p.textContent = s && s.autoplay ? 'Queue is empty. YouTube Music’s autoplay will pick what’s next.' : 'Queue is empty.';
+      list.append(p);
+    }
+    queue.forEach((t, i) => list.append(row({
+      index: i + 1, title: t.title || t.videoId, subtitle: [describe(t), t.durationSeconds ? fmt(t.durationSeconds) : ''].filter(Boolean).join(' · '),
+      buttons: [button('Remove', () => command(`remove ${i + 1}`), { aria: `Remove ${t.title}` })],
+    })));
+  }
+
+  function renderProgress() {
+    const player = snapshot && snapshot.player, cur = snapshot && snapshot.current;
+    let pos = 0, dur = 0;
+    if (player && cur) {
+      dur = player.duration || cur.durationSeconds || 0;
+      pos = player.position + (snapshot.status === 'playing' ? (Date.now() - lastPollAt) / 1000 : 0);
+      pos = Math.min(pos, dur || pos);
+    }
+    $('pos').textContent = fmt(pos); $('dur').textContent = fmt(dur);
+    $('fill').style.width = dur ? `${(pos / dur) * 100}%` : '0';
+    $('bar').setAttribute('aria-valuemax', String(Math.round(dur))); $('bar').setAttribute('aria-valuenow', String(Math.round(pos)));
+  }
+
+  async function refresh() {
+    try { snapshot = (await api('/api/status')).data; lastPollAt = Date.now(); }
+    catch (error) { snapshot = null; if (/token/i.test(error.message)) toast('This remote needs the API token: open it as /#token=<token>', true); }
+    render();
+  }
+
+  $('toggle').addEventListener('click', () => command('toggle', { quiet: true }));
+  $('next').addEventListener('click', () => command('next'));
+  $('prev').addEventListener('click', () => command('prev', { quiet: true }));
+  $('clear').addEventListener('click', () => command('clear'));
+  $('autoplay').addEventListener('change', (e) => command(`autoplay ${e.target.checked ? 'on' : 'off'}`, { quiet: true }));
+  $('volume').addEventListener('input', () => { volumeDragging = true; });
+  $('volume').addEventListener('change', async (e) => { await command(`volume ${e.target.value}`, { quiet: true }); volumeDragging = false; });
+  $('bar').addEventListener('click', (e) => {
+    const dur = snapshot?.player?.duration; if (!dur) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    command(`seek ${Math.round(((e.clientX - rect.left) / rect.width) * dur)}`, { quiet: true });
+  });
+  $('bar').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight') command('seek +10', { quiet: true });
+    if (e.key === 'ArrowLeft') command('seek -10', { quiet: true });
+  });
+
+  $('search-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const q = $('query').value.trim(); if (!q) return;
+    const list = $('results'); list.replaceChildren();
+    const p = document.createElement('p'); p.className = 'empty'; p.textContent = 'Searching…'; list.append(p);
+    try {
+      // A pasted link doesn't need a search.
+      if (/^(https?:\/\/)?(www\.|m\.)?(music\.)?(youtube\.com|youtu\.be)\//i.test(q)) {
+        list.replaceChildren();
+        list.append(row({ title: q, subtitle: 'Link', buttons: [button('Play', () => command(`play ${q}`), { accent: true }), button('Queue', () => command(`add ${q}`))] }));
+        return;
+      }
+      const results = (await api(`/api/search?q=${encodeURIComponent(q)}`)).data;
+      list.replaceChildren();
+      if (!results.length) { p.textContent = 'No playable results.'; list.append(p); return; }
+      for (const t of results) {
+        list.append(row({
+          thumb: t.thumbnail, title: t.title,
+          subtitle: [t.kind, describe(t), t.durationSeconds ? fmt(t.durationSeconds) : ''].filter(Boolean).join(' · '),
+          buttons: [
+            button('Play', () => command(`play ${playTarget(t)}`), { accent: true, aria: `Play ${t.title}` }),
+            button('Queue', () => command(`add ${playTarget(t)}`), { aria: `Add ${t.title} to queue` }),
+          ],
+        }));
+      }
+    } catch (error) { p.textContent = error.message; list.replaceChildren(p); }
+  });
+
+  refresh();
+  setInterval(() => { if (!document.hidden) refresh(); }, 2000);
+  setInterval(renderProgress, 500);
+})();
+</script>
+</body>
+</html>

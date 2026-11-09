@@ -1,0 +1,4 @@
+node_modules/
+.ytm-bot/
+*.log
+test-results/
