@@ -4,9 +4,20 @@ import { join } from 'node:path';
 import { StreamingBot } from '../../src/bot.ts';
 import { launchBrowser, type BrowserSession } from '../../src/browser.ts';
 import { silentLogger } from '../../src/logger.ts';
+import { resolveBrowserSettings, type BrowserSettings, type ResolvedBrowserSettings } from '../../src/settings.ts';
 import { YTMusicDriver } from '../../src/ytmusic/driver.ts';
 import type { Track } from '../../src/ytmusic/types.ts';
 import { startFakeYTMusic, type FakeYTMusic } from './fake-ytmusic.ts';
+
+/** Headless settings for tests; CHROMIUM_PATH picks a specific browser binary. */
+export function testBrowserSettings(userDataDir: string, extra: BrowserSettings = {}): ResolvedBrowserSettings {
+  return resolveBrowserSettings({
+    userDataDir,
+    headless: true,
+    ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}),
+    ...extra,
+  });
+}
 
 export interface Harness {
   fake: FakeYTMusic;
@@ -19,12 +30,7 @@ export interface Harness {
 export async function startHarness(): Promise<Harness> {
   const fake = await startFakeYTMusic();
   const profileDir = await mkdtemp(join(tmpdir(), 'ytm-bot-test-'));
-  const session = await launchBrowser({
-    profileDir,
-    headless: true,
-    muted: true,
-    ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}),
-  });
+  const session = await launchBrowser(testBrowserSettings(profileDir), { muted: true });
   const bots: StreamingBot[] = [];
 
   return {

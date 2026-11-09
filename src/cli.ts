@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
-import { StreamingBot } from './bot.ts';
 import { launchBrowser, type BrowserSession } from './browser.ts';
 import { formatTrack } from './commands.ts';
 import { HELP, resolveConfig, type Config } from './config.ts';
+import { startBot } from './index.ts';
 import { createLogger, errorMessage, type Logger } from './logger.ts';
 import { startRepl } from './repl.ts';
-import { startServer, type RunningServer } from './server.ts';
+import { defaultConfigPathIfPresent, loadBrowserSettings } from './settings.ts';
 import { YTMusicDriver } from './ytmusic/driver.ts';
 
 async function main(): Promise<void> {
@@ -30,93 +30,90 @@ async function main(): Promise<void> {
   }
 
   const log = createLogger(config.logLevel);
-  log.debug(`Using profile ${config.profileDir}`);
-  const session = await launchBrowser({
-    profileDir: config.profileDir,
-    headless: config.headless,
-    ...(config.channel ? { channel: config.channel } : {}),
-    ...(config.executablePath ? { executablePath: config.executablePath } : {}),
-  });
+  const configPath = config.configPath ?? defaultConfigPathIfPresent();
+  if (config.mode === 'start') {
+    await run(config, configPath, log);
+    return;
+  }
 
+  const { settings, profile } = await loadBrowserSettings({
+    ...(configPath ? { configPath } : {}),
+    ...(config.profile ? { profile: config.profile } : {}),
+    overrides: config.browser,
+  });
+  if (config.mode === 'login' && settings.headless) {
+    throw new Error(`Signing in needs a visible browser window, but profile "${profile}" is headless.`);
+  }
+  const session = await launchBrowser(settings);
   try {
-    if (config.mode === 'login') await login(session, config, log);
-    else if (config.mode === 'search') await searchOnce(session, config, log);
-    else await run(session, config, log);
-  } catch (error) {
+    if (config.mode === 'login') await login(session, settings.userDataDir, config, log);
+    else await searchOnce(session, config, log);
+  } finally {
     await session.close();
-    throw error;
   }
 }
 
-function makeDriver(session: BrowserSession, config: Config, log: Logger): YTMusicDriver {
-  return new YTMusicDriver(session.context, session.page, {
-    baseUrl: config.baseUrl,
-    interactive: !config.headless,
-    gateTimeoutMs: config.gateTimeoutMs,
-    navigationTimeoutMs: 30_000,
-    logger: log,
-  });
-}
-
-async function login(session: BrowserSession, config: Config, log: Logger): Promise<void> {
+async function login(session: BrowserSession, userDataDir: string, config: Config, log: Logger): Promise<void> {
   await session.page.goto(config.baseUrl);
   log.info('Sign in with the "Sign in" button in the YouTube Music window, then close the window.');
-  log.info(`Your session is saved in ${config.profileDir} for next time.`);
+  log.info(`Your session is saved in ${userDataDir} for next time.`);
   log.info('If Google says the browser may not be secure, try "--channel chrome", or just use the bot signed out.');
   await new Promise<void>((resolve) => session.context.on('close', () => resolve()));
 }
 
 async function searchOnce(session: BrowserSession, config: Config, log: Logger): Promise<void> {
-  const driver = makeDriver(session, config, log);
+  const driver = new YTMusicDriver(session.context, session.page, {
+    baseUrl: config.baseUrl,
+    interactive: false,
+    gateTimeoutMs: config.gateTimeoutMs,
+    navigationTimeoutMs: 30_000,
+    logger: log,
+  });
   const results = await driver.search(config.items[0]!, 10);
   if (results.length === 0) process.stdout.write('No playable results.\n');
   results.forEach((t, i) => {
     const kind = t.kind ? `  [${t.kind}]` : '';
     process.stdout.write(`${String(i + 1).padStart(2)}. ${formatTrack(t)}${kind}\n    ${config.baseUrl}/watch?v=${t.videoId}\n`);
   });
-  await session.close();
 }
 
-async function run(session: BrowserSession, config: Config, log: Logger): Promise<void> {
-  const bot = new StreamingBot(makeDriver(session, config, log), {
+async function run(config: Config, configPath: string | undefined, log: Logger): Promise<void> {
+  const running = await startBot({
+    browser: config.browser,
+    ...(configPath ? { configPath } : {}),
+    ...(config.profile ? { profile: config.profile } : {}),
+    baseUrl: config.baseUrl,
     autoplay: config.autoplay,
+    ...(config.volume !== undefined ? { volume: config.volume } : {}),
+    ...(config.server
+      ? { server: { host: config.host, port: config.port, ...(config.apiToken ? { token: config.apiToken } : {}) } }
+      : {}),
+    gateTimeoutMs: config.gateTimeoutMs,
     logger: log,
-    ...(config.volume !== undefined ? { initialVolume: config.volume } : {}),
   });
+  const { bot, server, session } = running;
 
-  let server: RunningServer | null = null;
   let shuttingDown = false;
   const shutdown = async (reason: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info(`Shutting down (${reason}).`);
-    bot.stop();
-    await server?.close();
-    await session.close();
+    await running.stop();
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown('interrupted'));
   process.on('SIGTERM', () => void shutdown('terminated'));
   session.context.on('close', () => void shutdown('browser closed'));
 
-  await bot.start();
   log.info('YouTube Music is open.');
-
-  if (!config.repl || !process.stdin.isTTY) {
-    bot.on('trackchange', (track) => log.info(`Now playing: ${formatTrack(track)}`));
-  }
-  bot.on('error', (error) => log.debug(`Bot error: ${error.message}`));
-
-  if (config.server) {
-    server = await startServer(bot, {
-      host: config.host,
-      port: config.port,
-      logger: log,
-      ...(config.apiToken ? { token: config.apiToken } : {}),
-    });
+  if (server) {
     const tokenHint = config.apiToken ? '#token=<your token>' : '';
     log.info(`Web remote: ${server.url}/${tokenHint}  ·  API: ${server.url}/api/status`);
   }
+
+  const interactive = config.repl && process.stdin.isTTY;
+  if (!interactive) bot.on('trackchange', (track) => log.info(`Now playing: ${formatTrack(track)}`));
+  bot.on('error', (error) => log.debug(`Bot error: ${error.message}`));
 
   for (const item of config.items) {
     try {
@@ -127,11 +124,8 @@ async function run(session: BrowserSession, config: Config, log: Logger): Promis
     }
   }
 
-  if (config.repl && process.stdin.isTTY) {
-    startRepl(bot, { logger: log, onQuit: () => void shutdown('quit') });
-  } else {
-    log.info('Running without a terminal prompt; stop with Ctrl+C.');
-  }
+  if (interactive) startRepl(bot, { logger: log, onQuit: () => void shutdown('quit') });
+  else log.info('Running without a terminal prompt; stop with Ctrl+C.');
 }
 
 main().catch((error) => {

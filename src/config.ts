@@ -1,7 +1,6 @@
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { isLogLevel, type LogLevel } from './logger.ts';
+import { errorMessage, isLogLevel, type LogLevel } from './logger.ts';
+import { DEFAULT_CONFIG_PATH, SettingsError, validateBrowserSettings, WEBGL_MODES, type BrowserSettings } from './settings.ts';
 import { DEFAULT_BASE_URL } from './ytmusic/selectors.ts';
 
 export type Mode = 'start' | 'login' | 'search' | 'help' | 'version';
@@ -10,10 +9,12 @@ export interface Config {
   mode: Mode;
   /** Things to queue at startup (start mode) or the search query (search mode). */
   items: string[];
-  profileDir: string;
-  headless: boolean;
-  channel?: string;
-  executablePath?: string;
+  /** Config file with browser profiles. */
+  configPath?: string;
+  /** Named browser profile from the config file. */
+  profile?: string;
+  /** Browser settings given as flags; applied over the config file and profile. */
+  browser: BrowserSettings;
   baseUrl: string;
   server: boolean;
   host: string;
@@ -33,31 +34,51 @@ Usage:
   ytm-bot login [options]              Open the browser so you can sign in to YouTube Music
   ytm-bot search [options] <query>     Print search results and exit
 
-Options:
-  --profile <dir>        Browser profile to use (default: ~/.ytm-bot/profile)   [YTM_BOT_PROFILE]
-  --channel <name>       Use an installed browser: chrome, msedge, ...           [YTM_BOT_CHANNEL]
-  --executable-path <p>  Path to a Chromium-based browser binary
-  --port <n>             Port for the API and web remote (default: 8765)         [YTM_BOT_PORT]
-  --host <addr>          Address to listen on (default: 127.0.0.1)               [YTM_BOT_HOST]
-  --api-token <token>    Require "Authorization: Bearer <token>" on the API      [YTM_BOT_API_TOKEN]
-  --no-server            Don't start the API / web remote
-  --no-repl              Don't read commands from the terminal (for services)
-  --no-autoplay          Stop when the queue runs out instead of continuing with YouTube Music's picks
-  --volume <0-100>       Volume to start at
-  --gate-timeout <sec>   How long to wait for you to clear a CAPTCHA/consent page (default: 300)
-  --log-level <level>    debug, info, warn, error or silent (default: info)      [YTM_BOT_LOG_LEVEL]
-  --headless             Run without a window (testing only; YouTube Music rejects headless browsers)
-  --base-url <url>       YouTube Music URL (default: ${DEFAULT_BASE_URL})       [YTM_BOT_BASE_URL]
-  -h, --help             Show this help
-  --version              Show the version
+Browser:
+  --config <file>          Config file with browser settings and profiles       [YTM_BOT_CONFIG]
+                           (default: ${DEFAULT_CONFIG_PATH}, if it exists)
+  --profile <name>         Browser profile from the config file to use          [YTM_BOT_PROFILE]
+  --user-data-dir <dir>    Browser data directory (default: ~/.ytm-bot/profile,  [YTM_BOT_USER_DATA_DIR]
+                           or ~/.ytm-bot/profiles/<name> for a named profile)
+  --channel <name>         Use an installed browser: chrome, msedge, ...        [YTM_BOT_CHANNEL]
+  --executable-path <p>    Path to a Chromium-based browser binary
+  --browser-arg=<switch>   Extra Chromium switch; repeatable, e.g. --browser-arg=--start-maximized
+  --locale <tag>           Interface language, e.g. de-DE
+  --webgl <mode>           ${WEBGL_MODES.join(' | ')} (default: auto)               [YTM_BOT_WEBGL]
+  --headless               No window (testing only; YouTube Music rejects headless browsers)
+
+Player:
+  --port <n>               Port for the API and web remote (default: 8765)      [YTM_BOT_PORT]
+  --host <addr>            Address to listen on (default: 127.0.0.1)            [YTM_BOT_HOST]
+  --api-token <token>      Require "Authorization: Bearer <token>" on the API   [YTM_BOT_API_TOKEN]
+  --no-server              Don't start the API / web remote
+  --no-repl                Don't read commands from the terminal (for services)
+  --no-autoplay            Stop when the queue runs out instead of continuing with YouTube Music's picks
+  --volume <0-100>         Volume to play at
+  --gate-timeout <sec>     How long to wait for you to clear a CAPTCHA/consent page (default: 300)
+  --log-level <level>      debug, info, warn, error or silent (default: info)   [YTM_BOT_LOG_LEVEL]
+  --base-url <url>         YouTube Music URL (default: ${DEFAULT_BASE_URL})    [YTM_BOT_BASE_URL]
+  -h, --help               Show this help
+  --version                Show the version
 
 Examples:
   ytm-bot "daft punk get lucky" "https://music.youtube.com/watch?v=5NV6Rdv1a3I"
-  ytm-bot --no-repl --port 9000 --api-token secret
+  ytm-bot --profile pi --no-repl --host 0.0.0.0 --api-token secret
+  ytm-bot --webgl disabled --browser-arg=--alsa-output-device=hw:1,0
   curl -X POST localhost:8765/api/command -H 'Content-Type: application/json' -d '{"command":"next"}'
 `;
 
 const MODES = new Set(['start', 'login', 'search']);
+
+/** Maps setting paths back to the flags they came from, for error messages. */
+const FLAG_FOR_SETTING: Array<[RegExp, string]> = [
+  [/^flags\.args\[\d+\]/, '--browser-arg'],
+  [/^flags\.context\.locale/, '--locale'],
+  [/^flags\.webgl/, '--webgl'],
+  [/^flags\.channel/, '--channel'],
+  [/^flags\.executablePath/, '--executable-path'],
+  [/^flags\.userDataDir/, '--user-data-dir'],
+];
 
 export function resolveConfig(argv: string[], env: NodeJS.ProcessEnv = process.env): Config {
   const { values, positionals } = parseArgs({
@@ -66,9 +87,15 @@ export function resolveConfig(argv: string[], env: NodeJS.ProcessEnv = process.e
     allowNegative: true,
     strict: true,
     options: {
+      config: { type: 'string' },
       profile: { type: 'string' },
+      'user-data-dir': { type: 'string' },
       channel: { type: 'string' },
       'executable-path': { type: 'string' },
+      'browser-arg': { type: 'string', multiple: true },
+      locale: { type: 'string' },
+      webgl: { type: 'string' },
+      headless: { type: 'boolean' },
       port: { type: 'string' },
       host: { type: 'string' },
       'api-token': { type: 'string' },
@@ -78,7 +105,6 @@ export function resolveConfig(argv: string[], env: NodeJS.ProcessEnv = process.e
       volume: { type: 'string' },
       'gate-timeout': { type: 'string' },
       'log-level': { type: 'string' },
-      headless: { type: 'boolean' },
       'base-url': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean' },
@@ -106,16 +132,10 @@ export function resolveConfig(argv: string[], env: NodeJS.ProcessEnv = process.e
     throw new Error(`--base-url "${baseUrl}" is not a URL.`);
   }
 
-  const volume = values.volume === undefined ? undefined : integer(values.volume, '--volume', 0, 100);
-  const channel = values.channel ?? env.YTM_BOT_CHANNEL;
-  const executablePath = values['executable-path'];
-  const apiToken = values['api-token'] ?? env.YTM_BOT_API_TOKEN;
-
   const config: Config = {
     mode,
     items: mode === 'search' ? [items.join(' ')] : items,
-    profileDir: resolve(values.profile ?? env.YTM_BOT_PROFILE ?? join(homedir(), '.ytm-bot', 'profile')),
-    headless: values.headless ?? truthy(env.YTM_BOT_HEADLESS),
+    browser: browserFlags(values, env),
     baseUrl,
     server: values.server && mode === 'start',
     host: values.host ?? env.YTM_BOT_HOST ?? '127.0.0.1',
@@ -125,13 +145,52 @@ export function resolveConfig(argv: string[], env: NodeJS.ProcessEnv = process.e
     logLevel,
     gateTimeoutMs: integer(values['gate-timeout'] ?? '300', '--gate-timeout', 1, 86_400) * 1000,
   };
-  if (channel) config.channel = channel;
-  if (executablePath) config.executablePath = resolve(executablePath);
+  const configPath = values.config ?? env.YTM_BOT_CONFIG;
+  const profile = values.profile ?? env.YTM_BOT_PROFILE;
+  const apiToken = values['api-token'] ?? env.YTM_BOT_API_TOKEN;
+  if (configPath) config.configPath = configPath;
+  if (profile) config.profile = profile;
   if (apiToken) config.apiToken = apiToken;
-  if (volume !== undefined) config.volume = volume;
+  if (values.volume !== undefined) config.volume = integer(values.volume, '--volume', 0, 100);
 
-  if (mode === 'login' && config.headless) throw new Error('Signing in needs a visible browser window; drop --headless.');
+  if (mode === 'login' && config.browser.headless) throw new Error('Signing in needs a visible browser window; drop --headless.');
   return config;
+}
+
+/** Browser settings from flags and environment variables, validated like any other settings. */
+function browserFlags(
+  values: {
+    'user-data-dir'?: string | undefined;
+    channel?: string | undefined;
+    'executable-path'?: string | undefined;
+    'browser-arg'?: string[] | undefined;
+    locale?: string | undefined;
+    webgl?: string | undefined;
+    headless?: boolean | undefined;
+  },
+  env: NodeJS.ProcessEnv,
+): BrowserSettings {
+  const raw: Record<string, unknown> = {};
+  const userDataDir = values['user-data-dir'] ?? env.YTM_BOT_USER_DATA_DIR;
+  const channel = values.channel ?? env.YTM_BOT_CHANNEL;
+  const webgl = values.webgl ?? env.YTM_BOT_WEBGL;
+  const headless = values.headless ?? (env.YTM_BOT_HEADLESS === undefined ? undefined : truthy(env.YTM_BOT_HEADLESS));
+  if (userDataDir) raw.userDataDir = userDataDir;
+  if (channel) raw.channel = channel;
+  if (values['executable-path']) raw.executablePath = values['executable-path'];
+  if (values['browser-arg']?.length) raw.args = values['browser-arg'];
+  if (values.locale) raw.context = { locale: values.locale };
+  if (webgl) raw.webgl = webgl;
+  if (headless !== undefined) raw.headless = headless;
+
+  try {
+    return validateBrowserSettings(raw, 'flags');
+  } catch (error) {
+    if (!(error instanceof SettingsError)) throw error;
+    let message = errorMessage(error);
+    for (const [pattern, flag] of FLAG_FOR_SETTING) message = message.replace(pattern, flag);
+    throw new Error(message);
+  }
 }
 
 function integer(value: string, name: string, min: number, max: number): number {
@@ -140,6 +199,6 @@ function integer(value: string, name: string, min: number, max: number): number 
   return n;
 }
 
-function truthy(value: string | undefined): boolean {
-  return value !== undefined && /^(1|true|yes|on)$/i.test(value);
+function truthy(value: string): boolean {
+  return /^(1|true|yes|on)$/i.test(value);
 }

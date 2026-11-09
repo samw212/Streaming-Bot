@@ -1,0 +1,22 @@
+{
+  "browser": {
+    "context": { "locale": "en-US" }
+  },
+  "defaultProfile": "desktop",
+  "profiles": {
+    "desktop": {
+      "channel": "chrome",
+      "args": ["--start-maximized"]
+    },
+    "pi": {
+      "webgl": "disabled",
+      "args": ["--alsa-output-device=hw:1,0", "--window-size=1280,800"],
+      "context": { "reducedMotion": "reduce" }
+    },
+    "no-gpu-server": {
+      "userDataDir": "~/.ytm-bot/server",
+      "webgl": "software",
+      "context": { "locale": "en-GB" }
+    }
+  }
+}

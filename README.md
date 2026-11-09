@@ -42,7 +42,8 @@ Optionally sign in so you get your library, recommendations and Premium (no ads)
 npm run login        # sign in in the window that opens, then close it
 ```
 
-The session is kept in `~/.ytm-bot/profile`, so you only do this once. Google sometimes refuses sign-in from
+The session is kept in `~/.ytm-bot/profile`, so you only do this once. With named profiles, sign in to each one with
+`npm run login -- --profile <name>`. Google sometimes refuses sign-in from
 automated browsers. If it does, `--channel chrome` may help, and everything also works signed out.
 
 ## Controlling it
@@ -91,14 +92,81 @@ Every option can be a flag, and most also an environment variable. `npm start --
 
 | Flag | Env | Default |
 | --- | --- | --- |
-| `--profile <dir>` | `YTM_BOT_PROFILE` | `~/.ytm-bot/profile` |
+| `--config <file>` | `YTM_BOT_CONFIG` | `~/.ytm-bot/config.json`, if it exists |
+| `--profile <name>` | `YTM_BOT_PROFILE` | the file's `defaultProfile` |
+| `--user-data-dir <dir>` | `YTM_BOT_USER_DATA_DIR` | `~/.ytm-bot/profile` (`~/.ytm-bot/profiles/<name>` for a named profile) |
 | `--channel <chrome\|msedge>` | `YTM_BOT_CHANNEL` | Playwright's Chromium |
+| `--browser-arg=<switch>` (repeatable) | | |
+| `--locale <tag>` | | the system's |
+| `--webgl <auto\|hardware\|software\|disabled>` | `YTM_BOT_WEBGL` | `auto` |
 | `--port <n>` / `--host <addr>` | `YTM_BOT_PORT` / `YTM_BOT_HOST` | `8765` / `127.0.0.1` |
 | `--api-token <token>` | `YTM_BOT_API_TOKEN` | none |
 | `--no-server`, `--no-repl`, `--no-autoplay` | | |
 | `--volume <0-100>` | | YouTube Music's own setting |
 | `--gate-timeout <sec>` | | `300` |
 | `--log-level <level>` | `YTM_BOT_LOG_LEVEL` | `info` |
+
+### Browser settings and profiles
+
+Browser settings are a dictionary with these keys. Every key is optional.
+
+| Key | What it does |
+| --- | --- |
+| `userDataDir` | Browser data directory: your sign-in, cookies and YouTube Music preferences |
+| `channel` / `executablePath` | Use an installed browser (`"chrome"`, `"msedge"`) or a specific binary |
+| `args` | Extra Chromium command-line switches, e.g. `"--alsa-output-device=hw:1,0"` to pick a sound card |
+| `context` | Browser context overrides: `locale` (interface language), `colorScheme`, `reducedMotion`, `viewport`, `deviceScaleFactor` |
+| `webgl` | `auto` (Chromium decides), `hardware` (use the GPU even if Chromium blocklists its driver; needs a window), `software` (SwiftShader on the CPU, for machines without a GPU), `disabled` (saves resources on small machines; YouTube Music doesn't need WebGL) |
+| `headless` | No window; for tests only |
+
+Put them in a JSON config file with named profiles, then choose one with `--profile`
+(see [`examples/config.json`](examples/config.json)):
+
+```json
+{
+  "browser": { "context": { "locale": "en-US" } },
+  "defaultProfile": "desktop",
+  "profiles": {
+    "desktop": { "channel": "chrome", "args": ["--start-maximized"] },
+    "pi":      { "webgl": "disabled", "args": ["--alsa-output-device=hw:1,0"] }
+  }
+}
+```
+
+```sh
+npm start -- --profile pi
+npm start -- --profile pi --webgl software --browser-arg=--window-size=1280,800   # flags override the profile
+```
+
+Settings are layered: the built-in defaults, then `"browser"` (shared by every profile), then the chosen profile,
+then command-line flags. Later layers replace single values, add to `args`, and merge `context` key by key. If two
+switches have the same name, the later one wins, so your `args` override the ones the bot or a `webgl` mode adds.
+Relative paths in the file are relative to the file. Each named profile gets its own data directory unless it sets
+`userDataDir`, so profiles don't share or lock each other's browser data.
+
+Every setting is checked before the browser starts, and errors name the exact key, e.g.
+`profiles.pi.webgl must be one of auto, hardware, software, disabled (got "off")`. Some settings are rejected on
+purpose. The bot runs as an ordinary browser and doesn't disguise itself, so it won't take:
+
+- user-agent, proxy or `AutomationControlled` switches
+- `userAgent`, `timezoneId`, `geolocation`, `proxy` or `extraHTTPHeaders` overrides
+- stealth or fingerprint patches
+
+Switches the bot manages itself (`--user-data-dir`, `--headless`, remote debugging) point you to the right setting
+instead.
+
+From code, pass the same dictionary to `startBot`:
+
+```ts
+import { startBot } from './src/index.ts';
+
+const { bot, stop } = await startBot({
+  profile: 'pi',                                     // optional: start from a profile in the config file
+  browser: { webgl: 'disabled', context: { locale: 'de-DE' } },
+  server: { port: 8765 },
+});
+await bot.play('daft punk get lucky');
+```
 
 ### Running on a machine without a display
 
@@ -110,8 +178,8 @@ xvfb-run -a npm start -- --no-repl --host 0.0.0.0 --api-token "$(openssl rand -h
 ```
 
 Then use the web remote from your phone at `http://<machine>:8765/#token=<token>`. To sign in on such a machine, run
-`npm run login` once over `ssh -X` or a VNC session. Copying a profile from another computer usually doesn't
-work, because Chromium encrypts cookies with that computer's keychain.
+`npm run login` once over `ssh -X` or a VNC session. Copying a browser data directory from another computer
+usually doesn't work, because Chromium encrypts cookies with that computer's keychain.
 
 ### Security
 
@@ -145,6 +213,8 @@ flowchart LR
 | --- | --- |
 | `src/ytmusic/selectors.ts` | Every CSS selector and URL shape, plus detecting CAPTCHA/consent/sign-in pages. **When YouTube Music changes its markup, this is the file to fix.** |
 | `src/ytmusic/driver.ts` | Page-level Playwright work: navigating, searching, reading player state, pressing buttons. No policy. |
+| `src/settings.ts`, `src/browser.ts` | Browser settings: validating and layering dictionaries and profiles, then turning them into the Chromium command line and context options. |
+| `src/index.ts` | `startBot()`, the programmatic entry point the CLI also uses. |
 | `src/bot.ts` | The queue, history, autoplay decisions and track-end handling. Every playback change goes through one mutex, so commands from the terminal, API and page events can't interleave. |
 | `src/commands.ts` | The command set shared by the terminal and `/api/command`. |
 | `src/server.ts`, `src/web/index.html` | REST API and the single-file web remote. |
